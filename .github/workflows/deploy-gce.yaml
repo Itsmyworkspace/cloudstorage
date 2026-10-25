@@ -25,50 +25,148 @@ jobs:
 
       - name: Build and test
         run: |
+          set -euo pipefail
           chmod +x gradlew
           ./gradlew clean test bootJar
 
+      # Print deployment target
+      - name: Print deployment target
+        env:
+          GCE_HOST: ${{ secrets.GCE_HOST }}
+          GCE_USER: ${{ secrets.GCE_USER }}
+        run: |
+          set -euo pipefail
+
+          echo "Deployment host: $GCE_HOST"
+          echo "Deployment user: $GCE_USER"
+
+          test -n "$GCE_HOST" || {
+            echo "ERROR: GCE_HOST is missing"
+            exit 1
+          }
+
+          test -n "$GCE_USER" || {
+            echo "ERROR: GCE_USER is missing"
+            exit 1
+          }
+
+      # Configure SSH
       - name: Prepare SSH
         env:
           SSH_PRIVATE_KEY: ${{ secrets.GCE_SSH_PRIVATE_KEY }}
           SSH_KNOWN_HOSTS: ${{ secrets.GCE_KNOWN_HOSTS }}
+          GCE_HOST: ${{ secrets.GCE_HOST }}
         run: |
+          set -euo pipefail
+
+          test -n "$SSH_PRIVATE_KEY" || {
+            echo "ERROR: GCE_SSH_PRIVATE_KEY is missing"
+            exit 1
+          }
+
+          test -n "$SSH_KNOWN_HOSTS" || {
+            echo "ERROR: GCE_KNOWN_HOSTS is missing"
+            exit 1
+          }
+
           install -m 700 -d ~/.ssh
+
           printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
+
           printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
 
+          ssh-keygen -y -f ~/.ssh/deploy_key > /dev/null
+
+          if ! ssh-keygen -F "$GCE_HOST" \
+              -f ~/.ssh/known_hosts > /dev/null; then
+            echo "ERROR: No known_hosts entry for $GCE_HOST"
+            exit 1
+          fi
+
+          echo "SSH configuration prepared."
+
+      # Test SSH connection
+      - name: Test SSH connection
+        env:
+          GCE_HOST: ${{ secrets.GCE_HOST }}
+          GCE_USER: ${{ secrets.GCE_USER }}
+        run: |
+          set -euo pipefail
+
+          ssh -vv \
+            -i ~/.ssh/deploy_key \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            -o ConnectTimeout=15 \
+            "$GCE_USER@$GCE_HOST" \
+            'echo "SSH connection successful"'
+
+      # Find and upload the executable JAR
       - name: Copy JAR to GCE
         env:
           GCE_HOST: ${{ secrets.GCE_HOST }}
           GCE_USER: ${{ secrets.GCE_USER }}
         run: |
+          set -euo pipefail
+
           JAR=$(find build/libs -maxdepth 1 \
             -type f -name '*.jar' ! -name '*-plain.jar' \
             | head -n 1)
-          test -n "$JAR"
 
-          scp -i ~/.ssh/deploy_key \
+          if [ -z "$JAR" ]; then
+            echo "ERROR: No executable JAR found in build/libs"
+            exit 1
+          fi
+
+          echo "Uploading JAR: $JAR"
+          echo "Target: $GCE_USER@$GCE_HOST"
+
+          scp \
+            -i ~/.ssh/deploy_key \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
             "$JAR" \
             "$GCE_USER@$GCE_HOST:/tmp/csv-upload-app.jar"
 
+      # Install JAR and restart application
       - name: Install and restart application
         env:
           GCE_HOST: ${{ secrets.GCE_HOST }}
           GCE_USER: ${{ secrets.GCE_USER }}
         run: |
-          ssh -i ~/.ssh/deploy_key \
+          set -euo pipefail
+
+          echo "Installing application on $GCE_HOST"
+
+          ssh \
+            -i ~/.ssh/deploy_key \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
             "$GCE_USER@$GCE_HOST" \
-            'sudo install -o csvapp -g csvapp -m 0640 \
-             /tmp/csv-upload-app.jar /opt/csv-upload/app.jar &&
+            'set -e
+             sudo install -o csvapp -g csvapp -m 0640 \
+               /tmp/csv-upload-app.jar \
+               /opt/csv-upload/app.jar
              sudo systemctl restart csv-upload'
 
+      # Verify service
       - name: Verify service
         env:
           GCE_HOST: ${{ secrets.GCE_HOST }}
           GCE_USER: ${{ secrets.GCE_USER }}
         run: |
-          ssh -i ~/.ssh/deploy_key \
+          set -euo pipefail
+
+          ssh \
+            -i ~/.ssh/deploy_key \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
             "$GCE_USER@$GCE_HOST" \
-            'sudo systemctl is-active --quiet csv-upload'
+            'sudo systemctl is-active --quiet csv-upload &&
+             echo "Deployment successful: csv-upload is active"'
