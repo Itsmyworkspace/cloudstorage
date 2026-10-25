@@ -139,9 +139,7 @@ jobs:
           GCE_USER: ${{ secrets.GCE_USER }}
         run: |
           set -euo pipefail
-
-          echo "Installing application on $GCE_HOST"
-
+            
           ssh \
             -i ~/.ssh/deploy_key \
             -o BatchMode=yes \
@@ -149,10 +147,12 @@ jobs:
             -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
             "$GCE_USER@$GCE_HOST" \
             'set -e
-             sudo install -o csvapp -g csvapp -m 0640 \
-               /tmp/csv-upload-app.jar \
-               /opt/csv-upload/app.jar
-             sudo systemctl restart csv-upload'
+            sudo mkdir -p /opt/csv-upload
+            sudo install -o vineethkumaryalamanchi \
+              -g vineethkumaryalamanchi -m 0640 \
+              /tmp/csv-upload-app.jar \
+              /opt/csv-upload/app.jar
+            sudo systemctl restart csv-upload'
 
       # Verify service
       - name: Verify service
