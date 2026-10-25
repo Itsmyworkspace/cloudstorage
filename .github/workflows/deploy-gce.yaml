@@ -1,0 +1,74 @@
+
+name: Build and Deploy Spring Boot to GCE
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: csv-upload-production
+  cancel-in-progress: false
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+
+      - name: Build and test
+        run: |
+          chmod +x gradlew
+          ./gradlew clean test bootJar
+
+      - name: Prepare SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.GCE_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.GCE_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Copy JAR to GCE
+        env:
+          GCE_HOST: ${{ secrets.GCE_HOST }}
+          GCE_USER: ${{ secrets.GCE_USER }}
+        run: |
+          JAR=$(find build/libs -maxdepth 1 \
+            -type f -name '*.jar' ! -name '*-plain.jar' \
+            | head -n 1)
+          test -n "$JAR"
+
+          scp -i ~/.ssh/deploy_key \
+            "$JAR" \
+            "$GCE_USER@$GCE_HOST:/tmp/csv-upload-app.jar"
+
+      - name: Install and restart application
+        env:
+          GCE_HOST: ${{ secrets.GCE_HOST }}
+          GCE_USER: ${{ secrets.GCE_USER }}
+        run: |
+          ssh -i ~/.ssh/deploy_key \
+            "$GCE_USER@$GCE_HOST" \
+            'sudo install -o csvapp -g csvapp -m 0640 \
+             /tmp/csv-upload-app.jar /opt/csv-upload/app.jar &&
+             sudo systemctl restart csv-upload'
+
+      - name: Verify service
+        env:
+          GCE_HOST: ${{ secrets.GCE_HOST }}
+          GCE_USER: ${{ secrets.GCE_USER }}
+        run: |
+          ssh -i ~/.ssh/deploy_key \
+            "$GCE_USER@$GCE_HOST" \
+            'sudo systemctl is-active --quiet csv-upload'
