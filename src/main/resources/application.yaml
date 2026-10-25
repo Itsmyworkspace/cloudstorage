@@ -11,7 +11,7 @@ server:
   port: 8080
 
 gcs:
-  bucket-name: ${GCS_BUCKET_NAME}
+  bucket-name: demo-csv-upload-bucket
 
 
 
