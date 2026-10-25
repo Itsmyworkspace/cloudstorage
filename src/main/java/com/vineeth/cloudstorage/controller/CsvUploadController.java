@@ -21,7 +21,7 @@ public class CsvUploadController {
         this.gcsStorageService = gcsStorageService;
     }
 
-    @PostMapping(value = "/upload", produces = "application/json", consumes = "application/json")
+    @PostMapping(value = "/upload", produces = "application/json")
     public ResponseEntity<Map<String, String>> uploadFile(@RequestParam("file") MultipartFile file) throws IOException {
 
         String location = gcsStorageService.uploadCsv(file);
